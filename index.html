@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Notion Timer</title>
+
+<style>
+  :root{
+    --bg:#ffffff;
+    --text:#111827;
+    --muted:#6b7280;
+    --border:#e5e7eb;
+
+    --black:#111111;
+
+    /* Pills + secondary buttons */
+    --pill-bg:#e5e7eb;        /* light grey */
+    --pill-text:#4b5563;      /* darker grey */
+    --reset-bg:#f3f4f6;       /* even lighter grey */
+    --reset-text:#4b5563;     /* same as pill text */
+  }
+
+  html, body{
+    margin:0;
+    padding:0;
+    background:transparent;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  .wrap{
+    box-sizing:border-box;
+    padding:12px;
+    width:100%;
+  }
+
+  .card{
+    background:var(--bg);
+    border-radius:16px;
+    padding:14px;
+    box-sizing:border-box;
+  }
+
+  .topbar{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    margin-bottom:12px;
+  }
+
+  .title{
+    font-size:12px;
+    font-weight:700;
+    letter-spacing:0.02em;
+    color:var(--muted);
+    text-transform:uppercase;
+  }
+
+  .badge{
+    font-size:12px;
+    font-weight:700;
+    padding:6px 10px;
+    border-radius:999px;
+    background:var(--pill-bg);
+    color:var(--pill-text);
+    user-select:none;
+  }
+
+  .time{
+    text-align:center;
+    font-size:44px;
+    font-weight:800;
+    letter-spacing:0.02em;
+    color:var(--text);
+    padding:10px 0 14px;
+    user-select:none;
+  }
+
+  .sub{
+    text-align:center;
+    font-size:12px;
+    color:var(--muted);
+    margin-top:-8px;
+    margin-bottom:12px;
+    user-select:none;
+  }
+
+  .row{
+    display:flex;
+    gap:10px;
+    justify-content:center;
+    align-items:center;
+    flex-wrap:wrap;
+    margin:10px 0;
+  }
+
+  button{
+    appearance:none;
+    border:1px solid var(--border);
+    background:#fff;
+    color:var(--text);
+    border-radius:12px;
+    padding:10px 12px;
+    font-size:14px;
+    font-weight:700;
+    cursor:pointer;
+    user-select:none;
+  }
+
+  button:active{ transform:translateY(1px); }
+
+  .wide{ min-width:120px; }
+
+  /* Main start/pause button */
+  .primary{
+    border-color:transparent;
+    background:var(--black);
+    color:#fff;
+  }
+
+  /* Reset button */
+  .reset{
+    border-color:transparent;
+    background:var(--reset-bg);
+    color:var(--reset-text);
+  }
+
+  /* Presets + +/- */
+  .mini{
+    padding:8px 10px;
+    font-size:13px;
+    border-radius:10px;
+    background:var(--reset-bg);
+    color:var(--reset-text);
+    border-color:transparent;
+  }
+
+  .ghost{
+    background:var(--reset-bg);
+    color:var(--reset-text);
+    border-color:transparent;
+  }
+
+  .divider{
+    height:1px;
+    background:var(--border);
+    margin:12px 0;
+    border-radius:999px;
+  }
+</style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="topbar">
+        <div class="title">Timer</div>
+        <div class="badge" id="statusBadge">Ready</div>
+      </div>
+
+      <div class="time" id="timeDisplay">25:00</div>
+      <div class="sub" id="subDisplay">Adjust minutes, then press Start.</div>
+
+      <div class="row">
+        <button class="mini" id="minus1">−1 min</button>
+        <button class="mini" id="minus5">−5</button>
+        <button class="mini" id="plus5">+5</button>
+        <button class="mini" id="plus1">+1 min</button>
+      </div>
+
+      <div class="row">
+        <button class="wide primary" id="startPause">Start</button>
+        <button class="wide reset" id="reset">Reset</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="row">
+        <button class="ghost mini" id="set15">15</button>
+        <button class="ghost mini" id="set25">25</button>
+        <button class="ghost mini" id="set45">45</button>
+        <button class="ghost mini" id="set60">60</button>
+        <button class="ghost mini" id="set90">90</button>
+        <button class="ghost mini" id="set120">120</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/*
+  Notion-proof approach:
+  - When running, store endTime (timestamp).
+  - Remaining time is computed from endTime - Date.now().
+  - This prevents “pausing” drift when the embed is throttled.
+  - State is persisted in localStorage.
+*/
+
+const STORAGE_KEY = "notion_timer_v1";
+
+let setSeconds = 25 * 60;       // the “chosen” duration (used for Reset)
+let remainingSeconds = setSeconds;
+
+let running = false;
+let endTime = null;             // timestamp in ms
+let tickHandle = null;
+
+const elTime = document.getElementById("timeDisplay");
+const elSub  = document.getElementById("subDisplay");
+const elBtn  = document.getElementById("startPause");
+const elBadge= document.getElementById("statusBadge");
+
+function clampSeconds(s){
+  return Math.max(0, Math.min(s, 99 * 60 * 60)); // up to 99 hours
+}
+
+function pad2(n){ return String(n).padStart(2, "0"); }
+
+function formatTime(totalSeconds){
+  const s = Math.max(0, totalSeconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if(h > 0) return `${h}:${pad2(m)}:${pad2(sec)}`;
+  return `${m}:${pad2(sec)}`;
+}
+
+function save(){
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      setSeconds,
+      remainingSeconds,
+      running,
+      endTime
+    }));
+  }catch(e){}
+}
+
+function load(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return;
+    const data = JSON.parse(raw);
+
+    if(typeof data.setSeconds === "number") setSeconds = clampSeconds(data.setSeconds);
+    if(typeof data.remainingSeconds === "number") remainingSeconds = clampSeconds(data.remainingSeconds);
+    if(typeof data.running === "boolean") running = data.running;
+    if(typeof data.endTime === "number" || data.endTime === null) endTime = data.endTime;
+
+    // If it was running, recompute remaining from endTime immediately:
+    if(running && endTime){
+      const now = Date.now();
+      remainingSeconds = clampSeconds(Math.ceil((endTime - now) / 1000));
+      if(remainingSeconds <= 0){
+        running = false;
+        endTime = null;
+      }
+    }
+  }catch(e){}
+}
+
+function render(){
+  elTime.textContent = formatTime(remainingSeconds);
+
+  if(running){
+    elBtn.textContent = "Pause";
+    elBadge.textContent = "Running";
+    elSub.textContent = "Counting down…";
+  }else{
+    elBtn.textContent = "Start";
+    elBadge.textContent = remainingSeconds === 0 ? "Finished" : "Ready";
+    elSub.textContent = remainingSeconds === 0
+      ? "Time’s up. Reset or add minutes."
+      : "Adjust minutes, then press Start.";
+  }
+}
+
+function stopTick(){
+  if(tickHandle){
+    clearInterval(tickHandle);
+    tickHandle = null;
+  }
+}
+
+function startTick(){
+  stopTick();
+  tickHandle = setInterval(() => {
+    if(!running || !endTime) return;
+
+    const now = Date.now();
+    const nextRemaining = clampSeconds(Math.ceil((endTime - now) / 1000));
+    remainingSeconds = nextRemaining;
+
+    if(remainingSeconds <= 0){
+      remainingSeconds = 0;
+      running = false;
+      endTime = null;
+      stopTick();
+    }
+    render();
+    save();
+  }, 250);
+}
+
+function setDurationMinutes(min){
+  if(running) return;
+  setSeconds = clampSeconds(min * 60);
+  remainingSeconds = setSeconds;
+  render();
+  save();
+}
+
+function addSeconds(delta){
+  if(running) return;
+  remainingSeconds = clampSeconds(remainingSeconds + delta);
+  setSeconds = remainingSeconds; // make adjustments become the new reset value
+  render();
+  save();
+}
+
+function toggleStartPause(){
+  if(running){
+    running = false;
+    endTime = null;
+    stopTick();
+    render();
+    save();
+    return;
+  }
+
+  if(remainingSeconds <= 0) return;
+
+  running = true;
+  endTime = Date.now() + remainingSeconds * 1000;
+  startTick();
+  render();
+  save();
+}
+
+function reset(){
+  running = false;
+  endTime = null;
+  stopTick();
+  remainingSeconds = setSeconds;
+  render();
+  save();
+}
+
+// +/- buttons
+document.getElementById("minus1").addEventListener("click", () => addSeconds(-60));
+document.getElementById("plus1").addEventListener("click",  () => addSeconds( 60));
+document.getElementById("minus5").addEventListener("click", () => addSeconds(-300));
+document.getElementById("plus5").addEventListener("click",  () => addSeconds( 300));
+
+// start/pause + reset
+document.getElementById("startPause").addEventListener("click", toggleStartPause);
+document.getElementById("reset").addEventListener("click", reset);
+
+// presets
+document.getElementById("set15").addEventListener("click", () => setDurationMinutes(15));
+document.getElementById("set25").addEventListener("click", () => setDurationMinutes(25));
+document.getElementById("set45").addEventListener("click", () => setDurationMinutes(45));
+document.getElementById("set60").addEventListener("click", () => setDurationMinutes(60));
+document.getElementById("set90").addEventListener("click", () => setDurationMinutes(90));
+document.getElementById("set120").addEventListener("click", () => setDurationMinutes(120));
+
+// When the tab becomes visible again, force refresh from real time
+document.addEventListener("visibilitychange", () => {
+  if(!running || !endTime) return;
+  const now = Date.now();
+  remainingSeconds = clampSeconds(Math.ceil((endTime - now) / 1000));
+  if(remainingSeconds <= 0){
+    remainingSeconds = 0;
+    running = false;
+    endTime = null;
+    stopTick();
+  }
+  render();
+  save();
+});
+
+// init
+load();
+render();
+if(running && endTime){
+  startTick();
+}
+</script>
+</body>
+</html>
